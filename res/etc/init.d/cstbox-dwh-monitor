@@ -1,0 +1,23 @@
+#! /bin/sh
+### BEGIN INIT INFO
+# Provides:          cstbox-dwh-monitor
+# Required-Start:    $remote_fs $syslog
+# Required-Stop:     $remote_fs $syslog
+# Default-Start:     2 3 4 5
+# Default-Stop:      0 1 6
+# Short-Description: CSTBox DataWareHouse upload jobs status monitoring service
+# Description:       This service periodically check the status of upload
+#                    jobs sent to data warehouse server
+### END INIT INFO
+
+# Author: Eric Pascual <eric.pascual@cstb.fr>
+
+DESC="CSTBox DataWareHouse jobs status monitor"
+INIT_SEQ=94
+NAME=cstbox-dwh-monitor
+DAEMON=/opt/cstbox/bin/dwh-monitord.py
+DAEMON_ARGS=
+INIT_VERBOSE=yes
+
+. /opt/cstbox/lib/init/init-functions
+

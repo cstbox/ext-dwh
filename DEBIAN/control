@@ -1,0 +1,10 @@
+Package: cstbox-ext-dwh
+Version: 1.0.0
+Section: base
+Priority: optional
+Architecture: all
+Depends: cstbox-core, cstbox-ext-webui, cstbox-deps
+Maintainer: Eric Pascual <eric.pascual@cstb.fr>
+Description: CSTBox DataWhareHouse connectivity extension
+    This package adds the extensions required to export data and
+    configuration to the data warehouse server.
