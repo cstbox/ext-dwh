@@ -1,0 +1,89 @@
+{
+	"coordinators":
+	{
+		"x2d1":
+		{
+		    "type": "x2d",
+			"port": "/dev/ttyUSB0", 
+			"devices":
+				{
+					"MEX-1":
+					{
+							"type":"x2d:mex",
+							"location":"house",
+							"address":"1c4dc3",
+							"varname":"presence_soignant"
+					},
+					"D10-1":
+						{
+							"type":"x2d:d10",
+							"enabled":true,
+							"location": "living room",
+							"address":"50b9",
+							"varname":"temp_living",
+							"events_ttl":"1h"
+						 },
+					"TMPEXT-1":
+						{
+							"type":"x2d:temp_ext",
+							"enabled":true,
+							"location": "garden",
+							"address":"8c0407",
+							"varname":"temp_garden",
+							"events_ttl":"1h"
+						},
+					"IRSX-1":
+						{
+							"type":"x2d:irsx",
+							"enabled":true,
+							"location": "living",
+							"address":"A1E95A",
+							"varname":"living_mvt",
+							"events_ttl":"1h"
+						},
+					"GP300-1":
+						{
+							"type":"x2d:gp300",
+							"enabled":true,
+							"period_secs": "1m",
+							"port":0,
+							"location": "living room",
+							"address":"256b5f",
+							"outputs":
+								{
+									"0":
+										{
+											"enabled":true,
+											"varname":"nrj"
+										}
+								}
+						},
+					"TYWATT-1":
+						{
+							"type":"x2d:tywatt",
+							"enabled":true,
+							"period_secs": "1m",
+							"port":"0",
+							"location": "living room",
+							"address":"241372",
+							"outputs":
+								{
+									"Total":
+										{
+											"varname":"nrj0"
+										},
+									"TI1":
+										{
+											"enabled":true,
+											"varname":"nrj1"
+										},
+									"TI2":
+										{
+											"varname":"nrj2"
+										}
+								}
+						}
+			}
+		}
+	}
+}

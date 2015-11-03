@@ -1,0 +1,44 @@
+{
+    "presence_soignant": {
+        "label": "présence soignant",
+        "type": "binary_state"
+    },
+    "temp_living": {
+        "label": "température living",
+        "type": "temperature",
+        "lower_bound": 10,
+        "upper_bound": 50,
+        "delta_min": -5,
+        "delta_max": 5
+    },
+    "temp_garden": {
+        "label": "température extérieure",
+        "type": "temperature",
+        "lower_bound": -20,
+        "upper_bound": 60,
+        "delta_min": -5,
+        "delta_max": 5
+    },
+    "living_mvt": {
+        "label": "mouvement living",
+        "type": "binary_state"
+    },
+    "nrj": {
+        "label": "consommation électrique GP300",
+        "type": "energy",
+        "lower_bound": 0,
+        "delta_min": 0
+    },
+    "nrj1": {
+        "label": "consommation électrique Tyw.T1",
+        "type": "energy",
+        "lower_bound": 0,
+        "delta_min": 0
+    },
+    "nrj2": {
+        "label": "consommation électrique Tyw.T2",
+        "type": "energy",
+        "lower_bound": 0,
+        "delta_min": 0
+    }
+}
