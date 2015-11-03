@@ -18,6 +18,11 @@ CONFIG_FILE_NAME = 'dwh.cfg'
 containing the parameters for all DataWareHouse related scripts.
 """
 
+VARS_METATDATA_FILE_NAME = "vars_metadata.cfg"
+""" The name of the file containing the exported variables metadata. This file
+is located in /etc/cstbox by default.
+"""
+
 FILE_TIMESTAMP_FMT = '%Y%m%d-%H%M%S'
 """ The format of the time stamp when included in file names.
 """
