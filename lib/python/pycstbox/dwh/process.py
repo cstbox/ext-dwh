@@ -1,8 +1,6 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
 
-# TODO finish adaptation
-
 # This file is part of CSTBox.
 #
 # CSTBox is free software: you can redistribute it and/or modify
@@ -41,18 +39,20 @@ import os
 import datetime
 import tempfile
 import time
-import ConfigParser
 import zipfile
 import json
 import requests
+import jsonschema
+import copy
 
 from pycstbox.log import Loggable
 import pycstbox.export
-import pycstbox.evtdao
+from pycstbox import evtdao
 from pycstbox.config import GlobalSettings
 from pycstbox.dwh.filters import EventsExportFilter, VariableDefsExportFilter, LINE_END
 from pycstbox.dwh.pending_jobs_queue import PendingJobsQueue
 from pycstbox.events import VarTypes
+from pycstbox.dwh import DWHException
 
 __author__ = 'Eric PASCUAL - CSTB (eric.pascual@cstb.fr)'
 
@@ -73,7 +73,7 @@ class DWHEventsExportJob(pycstbox.export.EventsExportJob):
         self._config = config
 
     def export_events(self):
-        """ Creates a ZIP archive containing the time series of the energy related variables.
+        """ Creates a ZIP archive containing the time series of the variables to be exported.
 
         The generated file name is placed in the private attribute ''self._archive'' for later use
         by the sending step.
@@ -85,7 +85,7 @@ class DWHEventsExportJob(pycstbox.export.EventsExportJob):
 
         filter_ = EventsExportFilter(self._config.site_code, prefix_with_type=False)
         extract_date = self._parms[PARM_EXTRACT_DATE]
-        with pycstbox.evtdao.get_dao(gs.get('dao_name')) as dao:
+        with evtdao.get_dao(gs.get('dao_name')) as dao:
             events = dao.get_events_for_day(extract_date, var_type=VarTypes.ENERGY)
             if events:
                 evt_count, series_files = filter_.export_events(events)
@@ -146,7 +146,7 @@ class DWHEventsExportJob(pycstbox.export.EventsExportJob):
             # since it will not fix the anomaly but just reproduce it again and again
 
             # Anyway, for record's sake, we go one step further by monitoring the job completion status
-            # and log the result
+            # and log the result
 
             # add the job id to the persistent queue
             queue = PendingJobsQueue()
@@ -190,7 +190,7 @@ class DWHEventsExportProcess(Loggable):
         Loggable.__init__(self, logname='evt-expproc')
         self._failed_jobs = {}
 
-    def run(self, config):
+    def run(self, cfg):
         """ Runs the job of the day, but before it, runs also all the job
         awaiting in the backlog if any.
 
@@ -200,34 +200,10 @@ class DWHEventsExportProcess(Loggable):
         unexpected error), we can be sure that it is included in the backlog
         for next time.
 
-        :param config:
-            process configuration, containing the following attributes:
-
-                site_code
-                    the code of the site, used by DataWareHouse portal to identify
-                    it
-                contact
-                    email of the person to which anomaly reports are sent
-                date_offset
-                    day shift from current time for defining the reference
-                    for data extraction (usually set to 1 for "yesterday")
-                data_upload_url
-                    the full URL (including protocol and credentials) for
-                    variable series data upload
-                connect_timeout
-                    timeout (seconds) for the server connection
-                max_try
-                    maximum number of data upload attempts
-                retry_delay
-                    delay (in seconds) before retrying a failed upload
-                login, password
-                    credentials
-
-            Because these settings come from a configuration file, all the
-            values are strings, even numeric ones.
+        :param ProcessConfiguration cfg: configuration data
 
             The process configuration contains only constant information not depending on the
-            excution instance. For instance, the reference time used to filter which events must
+            execution instance. For instance, the reference time used to filter which events must
             be extracted and exported is not included here, but passed using the ''parms''
             argument of the execution job constructor.
 
@@ -235,7 +211,7 @@ class DWHEventsExportProcess(Loggable):
         """
         self.log_info('starting')
 
-        backlog = pycstbox.export.Backlog('DataWareHouse.events')
+        backlog = pycstbox.export.Backlog('dwh.events')
         bl_jobs = [j for j in backlog]
         if bl_jobs:
             self.log_warn('not empty backlog : ' + ' '.join([j for j in bl_jobs]))
@@ -243,35 +219,35 @@ class DWHEventsExportProcess(Loggable):
             self.log_info('backlog is empty')
 
         # add the current job to the backlog before running it
-        jobid = pycstbox.export.EventsExportJob.make_jobid()
+        job_id = pycstbox.export.EventsExportJob.make_jobid()
         # compute the events extraction reference date, by applying the
         # requested offset to today's date. Note that the sign of the passed
         # value is ignored, since we have few chances to be able to extract
         # future events :)
         extract_date = (
-            datetime.datetime.utcnow()
-            - datetime.timedelta(days=abs(int(config.date_offset)))
+            datetime.datetime.utcnow() - datetime.timedelta(days=abs(cfg[ProcessConfiguration.Props.DATE_OFFSET]))
         ).date()
-        backlog[jobid] = {
+        backlog[job_id] = {
             PARM_EXTRACT_DATE: extract_date
         }
 
         # now execute all the jobs in the backlog
+        cfg_retry = cfg[ProcessConfiguration.Props.RETRIES]
+        max_try = cfg_retry[ProcessConfiguration.Props.MAX_ATTEMPTS]
+        retry_delay = cfg_retry[ProcessConfiguration.Props.DELAY]
+
         self._failed_jobs = {}
-        for jobid, jobparms in backlog.iteritems():
-            self.log_info('activating job with id=%s', jobid)
+        for job_id, job_parms in backlog.iteritems():
+            self.log_info('activating job with id=%s', job_id)
             job = DWHEventsExportJob(
-                'DataWareHouse.events', jobid, jobparms, config
+                'dwh.events', job_id, job_parms, cfg
             )
-            error_code = job.run(
-                max_try=config.max_try,
-                retry_delay=config.retry_delay
-            )
+            error_code = job.run(max_try=max_try, retry_delay=retry_delay)
             # if successful run, remove the job from the backlog
             if not error_code:
-                del backlog[jobid]
+                del backlog[job_id]
             else:
-                self._failed_jobs[jobid] = error_code
+                self._failed_jobs[job_id] = error_code
 
         if not self._failed_jobs:
             self.log_info('all jobs successful')
@@ -279,7 +255,7 @@ class DWHEventsExportProcess(Loggable):
         else:
             self.log_error(
                 'job(s) failed (%s)' %
-                ' '.join(['%s:%s' % (jobid, pycstbox.export.EventsExportJob.error_text(errcode)) for jobid, errcode in
+                ' '.join(['%s:%s' % (job_id, pycstbox.export.EventsExportJob.error_text(errcode)) for job_id, errcode in
                           self._failed_jobs.iteritems()])
             )
             if len(self._failed_jobs) == 1:
@@ -293,7 +269,7 @@ class DWHEventsExportProcess(Loggable):
         return self._failed_jobs
 
 
-class DWHConfigurationExportProcess(Loggable):
+class DWHVariableDefinitionsExportProcess(Loggable):
     """ Complete processing chain for configuration data export to DataWareHouse
     variable definitions.
 
@@ -319,12 +295,12 @@ class DWHConfigurationExportProcess(Loggable):
     @staticmethod
     def error_message(errcode):
         """Returns the error message corresponding to a given code"""
-        return DWHConfigurationExportProcess.err_messages[errcode]
+        return DWHVariableDefinitionsExportProcess.err_messages[errcode]
 
     def __init__(self):
         Loggable.__init__(self, logname='cfg-expproc')
 
-    def run(self, run_parms, devices_config):  #pylint: disable=R0912
+    def run(self, cfg, devices_config, vars_metadata):  #pylint: disable=R0912
         """ Builds the variable definitions dataset, using the current devices
         configuration data, and uploads it to the appropriate area on DataWareHouse
         server.
@@ -332,31 +308,8 @@ class DWHConfigurationExportProcess(Loggable):
         Unlike for events date this process is not scheduled to run
         periodically, so no backlog is handled here.
 
-        :param run_parms:
-            process configuration, containing the following attributes:
-
-                site_code
-                    the code of the site, used by DataWareHouse portal to identify it
-                contact
-                    email of the person to which anomaly reports are sent
-                cfg_upload_url
-                    the full URL (including protocol and credentials) for
-                    variable definitions upload
-                connect_timeout
-                    timeout (seconds) for the server connection
-                max_try
-                    maximum number of data upload attempts
-                retry_delay
-                    delay (in seconds) before retrying a failed upload
-                login, password
-                    credentials
-
-            Because these settings come from a configuration file, all the
-            values are strings, even numeric ones.
-
-        :param devices_config:
-            devices coonfiguration
-
+        :param ProcessConfiguration cfg: configuration data
+        :param devices_config: devices coonfiguration
         :returns: error code (ERR_xxx) if something went wrong, 0 if all is ok
         """
         self.log_info('starting')
@@ -365,29 +318,40 @@ class DWHConfigurationExportProcess(Loggable):
         # export the configuration as DataWareHouse point definitions
         error = self.ERR_EXPORT
         try:
-            exp_filter = VariableDefsExportFilter(run_parms.site_code, run_parms.contact)
-            data = exp_filter.export_devices_configuration(devices_config)
+            site_code = ProcessConfiguration.Props.SITE_CODE
+            exp_filter = VariableDefsExportFilter(
+                site_code=cfg[site_code],
+                contact=cfg[ProcessConfiguration.Props.REPORT_TO],
+                vars_metadata=vars_metadata
+            )
+            data = exp_filter.export_variable_definitions(devices_config)
 
         except Exception as e:  #pylint: disable=W0703
             self.log_error('configuration export failure : %s', str(e))
 
         else:
             self.log_info('configuration export ok')
-            max_try = run_parms.max_try
-            retry_delay = run_parms.retry_delay
+            cfg_retries = cfg[ProcessConfiguration.Props.RETRIES]
+            max_try = cfg_retries[ProcessConfiguration.Props.MAX_ATTEMPTS]
+            retry_delay = cfg_retries[ProcessConfiguration.Props.DELAY]
 
             with tempfile.TemporaryFile() as f:
                 # stores the result in the temp file
-                for line in data:
-                    f.write(line + LINE_END)
+                json.dump(data, f)
                 f.flush()
                 f.seek(0)
 
                 # send them to the server
-                url = run_parms.cfg_upload_url % (run_parms.site_code)
+                cfg_server = cfg[ProcessConfiguration.Props.SERVER]
+                url = cfg[ProcessConfiguration.Props.API_URLS][ProcessConfiguration.Props.DEFS_UPLOAD] % {
+                    'host': cfg_server[ProcessConfiguration.Props.HOST],
+                    'site': site_code
+                }
 
                 self.log_info('ready to send data')
 
+                cfg_auth = cfg_server[ProcessConfiguration.Props.AUTH]
+                auth = (cfg_auth[ProcessConfiguration.Props.LOGIN], cfg_auth[ProcessConfiguration.Props.PASSWORD])
                 cnt = 0
                 while not done and cnt < max_try:
                     cnt += 1
@@ -395,10 +359,11 @@ class DWHConfigurationExportProcess(Loggable):
                     self.log_info('POSTing data to %s', url)
                     resp = requests.post(
                         url,
-                        files={
-                            'metadata': f
-                        },
-                        auth=(run_parms.login, run_parms.password)
+                        data=f,
+                        auth=auth,
+                        headers={
+                            'Content-Type': 'application/json'
+                        }
                     )
 
                     self.log_info('%s - %s', resp, resp.text)
@@ -430,113 +395,165 @@ class DWHConfigurationExportProcess(Loggable):
         return error
 
 
-def checked_positive(s):
-    """ Checks if the parameter represents a strictly positive integer
-    :param s: the string to be checked
-    :return: the integer value
-    :rtype: int
-    :raises ValueError: if check fails
+class ProcessConfiguration(Loggable):
+    """ Configuration data manager, using JSON as persistence format.
     """
-    v = int(s)
-    if v > 0:
-        return v
-    else:
-        raise ValueError('not a positive integer: %d' % v)
+    class Props(object):
+        SITE_CODE = 'site_code'
+        DATE_OFFSET = 'date_offset'
+        REPORT_TO = 'report_to'
+        SERVER = 'server'
+        HOST = 'host'
+        AUTH = 'auth'
+        LOGIN = 'login'
+        PASSWORD = 'password'
+        API_URLS = 'api_urls'
+        DATA_UPLOAD = 'data_upload'
+        DEFS_UPLOAD = 'defs_upload'
+        JOB_STATUS = 'job_status'
+        CONNECT_TIMEOUT = 'connect_timeout'
+        RETRIES = 'retries'
+        MAX_ATTEMPTS = 'max_attempts'
+        DELAY = 'delay'
+        STATUS_MONITORING_PERIOD = 'status_monitoring_period'
 
-
-def flag(s):
-    """ Interprets a boolean flag represented by '0' or '1' (True only if value equals '1')
-    """
-    return s == '1'
-
-
-class ProcessConfiguration(ConfigParser.SafeConfigParser, Loggable):
-    """ A ConfigurationParser like class adding typing of the parameters,
-    and value checking at reading time.
-
-    Tailored for DataWareHouse export context.
-    """
-
-    SECTION = 'DataWareHouse'
-
-    DEFAULTS = {
-        'site_code': '',
-        'contact': '',
-        'data_upload_url': 'https://api.DataWareHouse.eu/v1/users/current/sites/$$/variables/series',
-        'cfg_upload_url': 'https://api.DataWareHouse.eu/v1/users/current/sites/$$/variables',
-        'job_status_url': 'https://api.DataWareHouse.eu/v1/users/current/sites/$$/jobs/$$',
-        'login': '',
-        'password': '',
-        'connect_timeout': '60',
-        'date_offset': '1',
-        'max_try': '3',
-        'retry_delay': '10',
-        'debug': '0'
+    SCHEMA = {
+        "$schema": "http://json-schema.org/draft-04/schema#",
+        "title": "Configuration",
+        "description": "DataWareHouse extension configuration file",
+        "type": "object",
+        "properties": {
+            Props.SITE_CODE: {
+                "description": "The unique identifier of the site which data are pushed to DWH",
+                "type": "string"
+            },
+            Props.DATE_OFFSET: {
+                "type": "integer",
+                "minimum": 1
+            },
+            Props.REPORT_TO: {
+                "type": "string",
+                "format": "email"
+            },
+            Props.SERVER: {
+                "type": "object",
+                "properties": {
+                    Props.HOST: {
+                        "type": "string",
+                        "format": "hostname"
+                    },
+                    Props.AUTH: {
+                        "type": "object",
+                        "properties": {
+                            Props.LOGIN: {
+                                "type": "string"
+                            },
+                            Props.PASSWORD: {
+                                "type": "string"
+                            }
+                        },
+                        "required": [Props.LOGIN, Props.PASSWORD]
+                    },
+                    Props.API_URLS: {
+                        "type": "object",
+                        "properties": {
+                            Props.DATA_UPLOAD: {
+                                "type": "string"
+                            },
+                            Props.DEFS_UPLOAD: {
+                                "type": "string"
+                            },
+                            Props.JOB_STATUS: {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    Props.CONNECT_TIMEOUT: {
+                        "type": "integer",
+                        "minimum": 1
+                    }
+                },
+                "required": [Props.HOST]
+            },
+            Props.RETRIES: {
+                "type": "object",
+                "properties": {
+                    Props.MAX_ATTEMPTS: {
+                        "type": "integer",
+                        "minimum": 1
+                    },
+                    Props.DELAY: {
+                        "type": "integer",
+                        "minimum": 1
+                    }
+                }
+            },
+            Props.STATUS_MONITORING_PERIOD: {
+                "type": "integer",
+                "minimum": 1
+            }
+        },
+        "required": [Props.SITE_CODE]
     }
 
-    _VALUE_HANDLERS = {
-        'connect_timeout': checked_positive,
-        'max_try': checked_positive,
-        'retry_delay': checked_positive,
-        'debug': flag
+    DEFAULTS = {
+        Props.DATE_OFFSET: 1,
+        Props.SERVER: {
+            Props.API_URLS: {
+                Props.DATA_UPLOAD: 'http://%(host)s/api/dss/sites/%(site)s/series',
+                Props.DEFS_UPLOAD: 'http://%(host)s/api/dss/sites/%(site)s/vardefs',
+                Props.JOB_STATUS: 'http://%(host)s/api/dss/sites/%(site)s/jobs/%(job_id)s/status'
+            },
+            Props.CONNECT_TIMEOUT: 60
+        },
+        Props.RETRIES: {
+            Props.MAX_ATTEMPTS: 3,
+            Props.DELAY: 10
+        },
+        Props.STATUS_MONITORING_PERIOD: 60
     }
 
     def __init__(self):
-        super(ProcessConfiguration, self).__init__()
-        self.add_section(self.SECTION)
-        for k, v in self.DEFAULTS.iteritems():
-            self.set(self.SECTION, k, v)
         Loggable.__init__(self, logname='cfg-proc')
-        self.password = self.login = None
+        self.data = None
 
-    @classmethod
-    def iterkeys(cls):
-        return cls.DEFAULTS.iterkeys()
+    def __getitem__(self, item):
+        return self.data[item]
 
-    def read(self, path):
-        super(ProcessConfiguration, self).read(path)
+    def load(self, path):
+        with file(path) as fp:
+            data = json.load(fp)
+            try:
+                jsonschema.validate(data, self.SCHEMA)
+            except jsonschema.ValidationError() as e:
+                raise ConfigurationError(e)
 
         # add default values for options not in loaded file
-        loaded_opts = self.options(self.SECTION)
-        for k in [k for k in self.DEFAULTS if k not in loaded_opts]:
-            self.set(self.SECTION, k, self.DEFAULTS[k])
+        cfg = copy.deepcopy(self.DEFAULTS)
+        _deep_update(cfg, data)
 
-        hndlr = self._VALUE_HANDLERS
-        for k, v in self.items(self.SECTION):
-            # Convert placeholders into string format replaceable parts
-            # Details:
-            # '%' char is used by ConfigParser for its interpolation process, and no escaping
-            # is available. Thus we need to use something else not conflicting.
-            v = v.replace('$$', '%s')
+        self.data = cfg
 
-            if k in hndlr:
-                # convert it to the appropriate type, checking it at the same time
-                try:
-                    v = hndlr[k](v)
-                except ValueError as e:
-                    raise ConfigParser.Error("invalid value for key '%s' (%s)" % (k, e))
-
-            setattr(self, k, v)
-
-    def write(self, path):
-        for option in self.options(self.SECTION):
-            if option == 'password':
-                value = self.password
-            else:
-                # for values other than passwords, replace string placeholders by something
-                # not clashing with ConfigParser mechanism
-                value = str(getattr(self, option)).replace('%s', '$$')
-            self.set(self.SECTION, option, value)
-        with open(path, 'wt') as f:
-            super(ProcessConfiguration, self).write(f)
+    def save(self, path):
+        with open(path, 'wt') as fp:
+            json.dump(self.data, fp)
 
     def as_dict(self, hide_pwd=False):
         """ Returns the configuration attributes as a dictionary.  """
-        return dict(
-            (k, getattr(self, k)
-                if not hide_pwd or k not in ('password', 'passwd') else '********'
-            )
-            for k in self.DEFAULTS
-        )
+        res = copy.deepcopy(self.data)
+        if hide_pwd:
+            res['server']['auth']['password'] = '********'
+        return res
 
 
+def _deep_update(d, u):
+    for k, v in u.iteritems():
+        if k not in d:
+            d[k] = copy.deepcopy(v)
+        else:
+            if isinstance(v, dict):
+                _deep_update(d[k], v)
+
+
+class ConfigurationError(DWHException):
+    pass
