@@ -41,7 +41,7 @@ if __name__ == '__main__':
 
     # Loads the configuration parameters
     try:
-        process_cfg.read(pycstbox.config.make_config_file_path(CONFIG_FILE_NAME))
+        process_cfg.load(pycstbox.config.make_config_file_path(CONFIG_FILE_NAME))
 
     except ConfigParser.Error as e:
         log.fatal('configuration error (%s)', e)
