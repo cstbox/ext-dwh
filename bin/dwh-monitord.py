@@ -16,13 +16,11 @@ import pycstbox.log as log
 import pycstbox.cli
 import pycstbox.config
 
-import pycstbox.dwh
-import pycstbox.dwh.process
+from pycstbox.dwh import CONFIG_FILE_NAME
+from pycstbox.dwh.process import ProcessConfiguration
 from pycstbox.dwh.pending_jobs_queue import PendingJobsQueue
 
 __author__ = 'Eric PASCUAL - CSTB (eric.pascual@cstb.fr)'
-
-# TODO finish OpeNRJ -> DWH adaptation
 
 SCRIPT_NAME = os.path.splitext(os.path.basename(__file__))[0]
 
@@ -56,11 +54,9 @@ class Worker(object):
         self._terminated = False
 
     def run(self):
-        process_name = 'series-storage'
-
         site_code = self._cfg.site_code
         period = int(self._cfg.status_monitoring_period)
-        auth=(self._cfg.login, self._cfg.password)
+        auth = (self._cfg.login, self._cfg.password)
 
         query = self._cfg.job_status_url
 
@@ -133,11 +129,11 @@ if __name__ == '__main__':
     pycstbox.log.set_loglevel_from_args(_logger, args)
 
     _logger.info('loading process configuration')
-    process_cfg = pycstbox.openrj.process.ProcessConfiguration()
+    process_cfg = ProcessConfiguration()
 
     # Loads the configuration parameters
     try:
-        process_cfg.read(pycstbox.config.make_config_file_path(pycstbox.openrj.CONFIG_FILE_NAME))
+        process_cfg.load(pycstbox.config.make_config_file_path(CONFIG_FILE_NAME))
 
     except ConfigParser.Error as e:
         _logger.fatal('configuration error (%s)', e)
