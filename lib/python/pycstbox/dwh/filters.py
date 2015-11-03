@@ -1,8 +1,6 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
 
-# TODO finish adaptation
-
 # This file is part of CSTBox.
 #
 # CSTBox is free software: you can redistribute it and/or modify
@@ -42,14 +40,14 @@ The specificity of each export type are detailed in the respective class documen
 
 """
 
-import datetime
 import os
 from collections import namedtuple
 import itertools
+import json
 
 from pycstbox.events import DataKeys
 from pycstbox.devcfg import Metadata
-from pycstbox.DataWareHouse import DataWareHouseException
+from pycstbox.dwh import DWHException
 
 __author__ = 'Eric PASCUAL - CSTB (eric.pascual@cstb.fr)'
 
@@ -65,7 +63,7 @@ DTFMT_POINT = "%Y-%m-%dT%H:%M:%SZ"
 
 SERIES_NAME_PATTERN = "%s_%s"
 """Format for the names of the series"""
-SERIES_FILENAME_PATTERN = "%s.%s.csv"
+SERIES_FILENAME_PATTERN = "%s.tsv"
 """Format for file names of the series"""
 
 LINE_END = '\n'
@@ -78,36 +76,7 @@ class EventsExportFilter(object):
     the global directives described in the general documentation of this module. Their content is :
 
       - one record per series point
-      - each record contains the value datation and the value itself.
-
-    The file is composed of two sections, separated by a blank line :
-
-    **Header:**
-        Contains global information which can be used in the subsequent processing ::
-
-            VERSION<TAB><format_version_number><LF>
-            CREATION_DATE<TAB><file_creation_timestamp><LF>
-            ID_SITE<TAB><site_code><LF>
-            FEEDBACK_TO<TAB><feedback_email><LF>
-            VARNAME<TAB><varname><LF>
-
-    *Placeholders meaning:*
-
-    ``format_version_number``
-        The format version allows further evolutions of the format while ensuring backwards
-        compatibility (current version given by VAR_DEFS_FORMAT_VERSION).
-    ``file_creation_timestamp``
-        The file generation date, formatted according to DTFMT_HEADER.
-    ``site_identifier``
-        The site identifier assigned by the DataWareHouse portal to the related site.
-    ``feedback_email``
-        email address to be used for processing report communication. If not
-        provided no report will be sent.
-    ``varname``
-        the name of the variable which series is contained in the file
-
-    **Data:**
-        The series point
+      - each record contains the value time stamp and the value itself.
     """
     def __init__(self, site_code, contact=None, prefix_with_type=True):
         """
@@ -144,21 +113,11 @@ class EventsExportFilter(object):
         if not os.access(to_dir, os.W_OK | os.X_OK):
             raise ValueError('cannot write to : %s' % to_dir)
 
-        # all generated files will have the same time in their name
-        export_time = datetime.datetime.utcnow()
-
         series_files = {}
         created_files = []
         evt_count = 0
         try:
             for evt in events:
-                # keep only energy events coming from Tywatts to avoid messing
-                # current DataWareHouse declarations with data issued from plugs
-                # TODO replace this dirty hack by something smarter
-                if evt.data[DataKeys.UNIT] != 'kWh':
-                    continue
-
-                evt_count += 1
                 if self._prefix_with_type:
                     series_name = SERIES_NAME_PATTERN % (evt.var_type, evt.var_name)
                 else:
@@ -168,18 +127,17 @@ class EventsExportFilter(object):
                 except KeyError:
                     outpath = os.path.join(
                         to_dir,
-                        self.series_filename(series_name, export_time)
+                        self.series_filename(series_name)
                     )
 
                     outfile = file(outpath, 'wt')
                     series_files[series_name] = outfile
                     created_files.append(outpath)
 
-                    self._emit_series_header(series_name, outfile)
-
                 # emit the event
                 value = maybe_boolean(str(evt.data[DataKeys.VALUE]))
                 outfile.write("%s\t%s%s" % (evt.timestamp.strftime(DTFMT_POINT), value, LINE_END))
+                evt_count += 1
 
         finally:
             for f in series_files.itervalues():
@@ -187,35 +145,14 @@ class EventsExportFilter(object):
 
         return evt_count, created_files
 
-    def _emit_series_header(self, varname, outfile):
-        """ Export the file header for a varname series.
-
-        :param str varname: the name of the variable name)
-        :param file outfile: the destination file
-        """
-        now = datetime.datetime.utcnow()
-        outfile.write(LINE_END.join([
-            "FORMAT_VERSION\t%d" % VAR_DEFS_FORMAT_VERSION,
-            "CREATION_DATE\t%s" % now.strftime(DTFMT_HEADER),
-            "ID_SITE\t%s" % self._site_code,
-            "FEEDBACK_TO\t%s" % (self._contact if self._contact else ''),
-            "VARNAME\t%s" % varname,
-            LINE_END
-        ]))
-        outfile.flush()
-
     @staticmethod
-    def series_filename(varname, export_time):
+    def series_filename(varname):
         """ Returns the DataWareHouse name of the file containing the data for a given series and export
         date.
 
         :param str varname: the name of the series variable
-        :param datetime.datetime export_time: the datetime of the export
         """
-        return SERIES_FILENAME_PATTERN % (
-            varname,
-            export_time.strftime(DTFMT_SERIES_FNAME)
-        )
+        return SERIES_FILENAME_PATTERN % varname
 
 
 class VariableDefsExportFilter(object):
@@ -228,18 +165,18 @@ class VariableDefsExportFilter(object):
     **Export format details:**
 
     The variable definitions are uploaded to reflect addition of variables, or modification
-    of their properties. Renaming a variable is not possible on purpose, to avoir incoherences
-    introduction. If a variable is renamed at the production level, this will tanslate into the
+    of their properties. Renaming a variable is not possible on purpose, to avoid incoherence
+    introduction. If a variable is renamed at the production level, this will translate into the
     creation of a new variable which will hold all upcoming data, and "freeze" of the old named one
     which series will not be extended any more, but will still be available.
 
-    The variable definitions file does not need to contain all existing variables, and can convey
+    The variable definitions file does not need to contain all the existing variables, and can convey
     a subset of them (added or modified ones only for instance). If the whole variable definitions
     set is sent, unmodified ones will be left untouched.
 
     The following properties are defined for each variable :
 
-    *varname*
+    *name*
         **[mandatory]** The name of the variable. It must conform the syntax defined by common
         programming languages.
 
@@ -250,15 +187,8 @@ class VariableDefsExportFilter(object):
         **[mandatory]** The semantic type of the variable. Ex: energy, voltage, temperature,
         motion,...
 
-    *value_type*
-        **[mandatory]** The data type of the variable value. Must be one of:
-
-            - ''N'' for a numerical value (integer or float)
-            - ''L'' for a logical value
-            - ''T'' for a textual (string) value
-
-    *units*
-        The units used to represent values. No coherence checking will be done between uploaded
+    *unit*
+        The unit used to represent values. No coherence checking will be done between uploaded
         values and declared units, and it is up to the producer to ensure it. For obvious reasons,
         units should not be changed if data have already been uploaded for the variable. If such a
         change is needed, it is advised to create a new variable. The provided units is taken as
@@ -273,51 +203,25 @@ class VariableDefsExportFilter(object):
 
     *delta_min, delta_max*
         Maximum absolute difference from last value. If provided (one or both) the data integration
-        process on the portal will check if provided values conform to the constrainst (only if a
+        process on the portal will check if provided values conform to the constraints (only if a
         previous value is available of course). Failing values will be rejected. Note that
         this is only applied to numeric values, and difference limits will be ignored for data types
         other than ''N''.
 
-    The definition file is composed of two sections separated by a blank line. They art detailed
-    hereafter.
+    The above listed properties will be exported if and only if the variables metadata are passed at
+    instantiation time. In this case, only variables present in the metadata will be included in the
+    definition. This feature can thus be used to export only a subset of the full configuration.
 
-    **File header:**
-
-        Contains global information which can be used in the subsequent processing
-
-    ::
-
-        FORMAT_VERSION<TAB><format_version_number><LF>
-        CREATION_DATE<TAB><file_creation_timestamp><LF>
-        ID_SITE<TAB><site_identifier><LF>
-        FEEDBACK_TO<TAB><feedback_email><LF>
-
-    *Placeholders meaning:*
-
-    ``format_version_number``
-        The format version allows further evolutions of the format while ensuring backwards
-        compatibility It is currently set to 1.
-    ``file_creation_timestamp``
-        The file generation date, formated as ISO UTC.
-    ``site_identifier``
-        The site identifier assigned by the DataWareHouse portal to the related site.
-    ``feedback_email``
-        email address to be used for processing report communication. If not
-        provided no report will be sent.
-
-    **Definitions:**
-
-    ::
-
-        <variable_definition_line><LF>
-
-    The variable definition lines contains the property values, separated by tabs, not provided
-    ones being represented by empty or blank values.
+    The definition file contains the JSON representation of the list of individual definitions, each one
+    being modeled as a dictionary keyed by the above listed property names.
     """
-    def __init__(self, site_code, contact=None):
+    def __init__(self, site_code, contact=None, vars_metadata=None):
         """
         :param str site_code: (mandatory) the id of the site (aka "system id" in CSTBox context)
         :param str contact: email of the contact person for process feedback sending
+        :param dict vars_metadata: an optional dictionary containing the variables matadata, specifying additional
+        information such as the label, the value domain validity, the derivative domain validity,... The key of the
+        dictionary must be the name of the variable
         :raises ValueError: if site id not provided
         """
         if not site_code:
@@ -325,12 +229,21 @@ class VariableDefsExportFilter(object):
 
         self._site_code = site_code
         self._contact = contact
+        if vars_metadata:
+            if not isinstance(vars_metadata, dict):
+                raise TypeError('variables metadata must be a dictionary')
+            self._vars_metadata = vars_metadata
+        else:
+            self._vars_metadata = {}
 
-    def export_devices_configuration(self, cfg):
-        """ Exports the devices configuration as a DataWareHouse variable definitions
-        file.
+    def _get_var_meta(self, var_name):
+        return self._vars_metadata.get(var_name, None)
 
-        Points are created for enabled devices and outputs only. In addition
+    def export_variable_definitions(self, cfg):
+        """ Exports the definitions of the variable sent to the DataWareHouse, based on the
+        devices configuration and the meta-data.
+
+        Definitions are created for enabled devices and outputs only. In addition
         only outputs to which a variable is attached are processed (which should
         always be the case since a variable name is mandatory for enabling an
         output).
@@ -341,10 +254,10 @@ class VariableDefsExportFilter(object):
 
         :param dict cfg:
                 the global configuration dictionary, as returned by the device
-                manager (if the value attached to the 'coordinators' key)
+                manager (i.e. the value attached to the 'coordinators' key)
 
-        :returns: a string list containing the export data, formated as CSV data
-            conforming DataWareHouse specifications. No new line is added to items.
+        :returns: the definitions of variables produced by the configured sensors,
+          formatted as a JSON list of dictionaries, as described in the specs.
         """
         # build the merged device list by concatenating the list of devices
         # attached to each coordinator. Thanks to itertools, we don't create
@@ -354,32 +267,7 @@ class VariableDefsExportFilter(object):
         )]
 
         vardefs = self._make_variable_definitions(all_devices)
-        now = datetime.datetime.utcnow()
-
-        result = [
-            "FORMAT_VERSION\t%d" % VAR_DEFS_FORMAT_VERSION,
-            "CREATION_DATE\t%s" % now.strftime(DTFMT_HEADER),
-            "ID_SITE\t%s" % self._site_code,
-            "FEEDBACK_TO\t%s" % (self._contact if self._contact else ''),
-            "",
-            _VarDef_attrs.replace(" ", "\t")
-        ]
-
-        for vardef in vardefs:
-            fields = [s if s is not None else '' for s in (
-                vardef.varname,
-                vardef.label,
-                vardef.type,
-                vardef.value_type,
-                vardef.units,
-                vardef.lower_bound,
-                vardef.upper_bound,
-                vardef.delta_min,
-                vardef.delta_max
-            )]
-            result.append('\t'.join(fields))
-
-        return result
+        return json.dumps([vdef.__dict__ for vdef in vardefs])
 
     def _make_variable_definitions(self, devices):
         """ Returns the definitions of the variables based on the passed devices
@@ -393,47 +281,78 @@ class VariableDefsExportFilter(object):
                 coordinators are merged in a single global list.
 
         :returns:
-            the corresponding list of point definitions, each item being an
+            the corresponding list of variable definitions, each item being an
             instance of the named tuple VariableDefinition
         :rtype: list
 
         :raises DataWareHouseException: in case of error
         """
-        points = []
+        definitions = []
 
-        def _make_variable_definition(varname_, vartype_, varunits_):
+        # TODO should the following policy be kept as is ?
+        def _make_variable_definition(varname_, vartype_, varunit_):
             """ Creates a variable definition, using the following rules :
 
                 - name : variable name
-                - label : variable name
+                - label : from metadata if provided, else the variable name
                 - type: variable type
                 - value_type : value type code derived from the type of the variable
-                - units : variable units
-                - lower_bound : unsupported
-                - upper_bound : unsupported
-                - delta_min : unsupported
-                - delta_max : unsupported
+                - unit : variable unit
+                - lower_bound : from metadata if provided
+                - upper_bound : from metadata if provided
+                - delta_min : from metadata if provided
+                - delta_max : from metadata if provided
+
+            If metadata are defined, variables which are not included will be considered as
+            not exported, and None is returned.
+
+            If no metadata are defined at all we consider that all the variables are exported.
 
             :param str varname_: the variable name
             :param str vartype_: the variable type
-            :param str varunits_: the variable units
+            :param str varunit_: the variable units
             :returns VariableDefinition: the definition named tuple
             """
-            return VariableDefinition(
-                varname_,
-                varname_,
-                vartype_,
-                self.vartype_to_valuetype(vartype_),
-                varunits_,
-                None,
-                None,
-                None,
-                None
-            )
+            if self._vars_metadata:
+                md = self._get_var_meta(varname_)
+                return VariableDefinition(
+                    varname_,
+                    md.get("label", varname_),
+                    vartype_,
+                    varunit_,
+                    md.get("lower_bound", None),
+                    md.get("upper_bound", None),
+                    md.get("delta_min", None),
+                    md.get("delta_max", None)
+                ) if md else None
+            else:
+                return VariableDefinition(
+                    varname_,
+                    varname_,
+                    vartype_,
+                    varunit_,
+                    None,
+                    None,
+                    None,
+                    None
+                )
 
         # cache for devices metadata
         devmetas = {}
         known_vars = []
+
+        def _add_definition(varname, output_meta):
+            if self._vars_metadata and varname not in self._vars_metadata:
+                return
+
+            if varname in known_vars:
+                raise DWHException('duplicated variable : %s' % varname)
+
+            known_vars.append(varname)
+
+            vartype = output_meta['__vartype__']
+            varunit = output_meta.get('__varunits__')
+            definitions.append(_make_variable_definition(varname, vartype, varunit))
 
         for cfg in [cfg for cfg in devices if cfg.enabled]:
             devtype = cfg.type
@@ -447,59 +366,25 @@ class VariableDefsExportFilter(object):
 
             meta_pdefs = devmeta['pdefs']
             if hasattr(cfg, 'outputs'):
+                # case of a multiple outputs device => explore all of them
                 meta_outputs = meta_pdefs['outputs']
                 meta_generic = meta_outputs.get('*', None)
-                # case of a multiple outputs device => explore all of them
-                for k, v in [(k, v) for (k, v) in cfg.outputs.iteritems()
-                             if v.get('enabled') and v.get('varname')]:
-                    varname = v['varname']
-                    if varname in known_vars:
-                        raise DataWareHouseException('duplicated variable : %s' % varname)
-                    known_vars.append(varname)
-
-                    # get the output metadata, handling the case where they are
-                    # defined as generic (ie a single definition with an id set
-                    # to '*')
-                    if k in meta_outputs:
-                        output_meta = meta_outputs[k]
-                    else:
-                        output_meta = meta_generic
-                    vartype = output_meta['__vartype__']
-                    varunits = output_meta.get('__varunits__')
-                    points.append(_make_variable_definition(varname, vartype, varunits))
+                for k, varname in (
+                    (k, v['varname']) for (k, v) in cfg.outputs.iteritems()
+                    if v.get('enabled') and v.get('varname')
+                ):
+                    # handle the case where output mata are defined as generic
+                    # or not (ie a single definition with an id set to '*')
+                    _add_definition(varname, meta_outputs.get(k, meta_generic))
 
             elif hasattr(cfg, 'varname'):
                 # case of a single output device with an attached variable
-                varname = cfg.varname
-                if varname in known_vars:
-                    raise DataWareHouseException('duplicated variable : %s' % varname)
-                known_vars.append(varname)
+                _add_definition(cfg.varname, meta_pdefs['root'])
 
-                output_meta = meta_pdefs['root']
-                vartype = output_meta['__vartype__']
-                varunits = output_meta.get('__varunits__')
-                points.append(_make_variable_definition(varname, vartype, varunits))
-
-        return points
-
-    # classification of CSTBox var type to DataWareHouse var types (default: numeric)
-    _TEXT_TYPES = ()
-    _LOGICAL_TYPES = ('opened', 'motion_detection', 'motion', 'presence')
-
-    @staticmethod
-    def vartype_to_valuetype(vartype):
-        """ Returns the DataWareHouse variable type corresponding to a given CSTBox variable type,
-        defaulting it to numeric if not explicitly declared. """
-        if vartype in VariableDefsExportFilter._TEXT_TYPES:
-            return 'T'
-        elif vartype in VariableDefsExportFilter._LOGICAL_TYPES:
-            return 'L'
-        else:
-            return 'N'
-
+        return definitions
 
 # DataWareHouse variable definition
-_VarDef_attrs = 'varname label type value_type units lower_bound upper_bound delta_min delta_max'
+_VarDef_attrs = 'varname label type unit lower_bound upper_bound delta_min delta_max'
 
 
 class VariableDefinition(namedtuple(
@@ -514,6 +399,9 @@ class VariableDefinition(namedtuple(
         :rtype: array
         """
         return self[:4] + tuple((str(v) if v is not None else '' for v in self[4:]))
+
+    def as_dict(self):
+        return self.__dict__
 
 _BOOL_TO_NUM = {'true': '1', 'false': '0'}
 
