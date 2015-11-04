@@ -355,7 +355,6 @@ class DWHVariableDefinitionsExportProcess(Loggable):
                 cnt = 0
                 while not done and cnt < max_try:
                     cnt += 1
-                    http_err = resp = None
                     self.log_info('POSTing data to %s', url)
                     resp = requests.post(
                         url,
@@ -366,7 +365,7 @@ class DWHVariableDefinitionsExportProcess(Loggable):
                         }
                     )
 
-                    self.log_info('%s - %s', resp, resp.text)
+                    # self.log_info('%s - %s', resp, resp.text)
                     if resp.ok:
                         done = True
                         resp_data = json.loads(resp.text)
@@ -454,26 +453,26 @@ class ProcessConfiguration(Loggable):
                         },
                         "required": [Props.LOGIN, Props.PASSWORD]
                     },
-                    Props.API_URLS: {
-                        "type": "object",
-                        "properties": {
-                            Props.DATA_UPLOAD: {
-                                "type": "string"
-                            },
-                            Props.DEFS_UPLOAD: {
-                                "type": "string"
-                            },
-                            Props.JOB_STATUS: {
-                                "type": "string"
-                            }
-                        }
-                    },
                     Props.CONNECT_TIMEOUT: {
                         "type": "integer",
                         "minimum": 1
                     }
                 },
                 "required": [Props.HOST]
+            },
+            Props.API_URLS: {
+                "type": "object",
+                "properties": {
+                    Props.DATA_UPLOAD: {
+                        "type": "string"
+                    },
+                    Props.DEFS_UPLOAD: {
+                        "type": "string"
+                    },
+                    Props.JOB_STATUS: {
+                        "type": "string"
+                    }
+                }
             },
             Props.RETRIES: {
                 "type": "object",
@@ -499,12 +498,12 @@ class ProcessConfiguration(Loggable):
     DEFAULTS = {
         Props.DATE_OFFSET: 1,
         Props.SERVER: {
-            Props.API_URLS: {
-                Props.DATA_UPLOAD: 'http://%(host)s/api/dss/sites/%(site)s/series',
-                Props.DEFS_UPLOAD: 'http://%(host)s/api/dss/sites/%(site)s/vardefs',
-                Props.JOB_STATUS: 'http://%(host)s/api/dss/sites/%(site)s/jobs/%(job_id)s/status'
-            },
             Props.CONNECT_TIMEOUT: 60
+        },
+        Props.API_URLS: {
+            Props.DATA_UPLOAD: 'http://%(host)s/api/dss/sites/%(site)s/series',
+            Props.DEFS_UPLOAD: 'http://%(host)s/api/dss/sites/%(site)s/vardefs',
+            Props.JOB_STATUS: 'http://%(host)s/api/dss/sites/%(site)s/jobs/%(job_id)s/status'
         },
         Props.RETRIES: {
             Props.MAX_ATTEMPTS: 3,
@@ -523,14 +522,20 @@ class ProcessConfiguration(Loggable):
     def load(self, path):
         with file(path) as fp:
             data = json.load(fp)
-            try:
-                jsonschema.validate(data, self.SCHEMA)
-            except jsonschema.ValidationError() as e:
-                raise ConfigurationError(e)
+        self.load_dict(data)
 
+    def loads(self, s):
+        self.load_dict(json.loads(s))
+
+    def load_dict(self, data):
         # add default values for options not in loaded file
         cfg = copy.deepcopy(self.DEFAULTS)
         _deep_update(cfg, data)
+
+        try:
+            jsonschema.validate(cfg, self.SCHEMA)
+        except jsonschema.ValidationError() as e:
+            raise ConfigurationError(e)
 
         self.data = cfg
 
