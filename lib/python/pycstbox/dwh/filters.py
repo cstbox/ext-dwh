@@ -257,7 +257,7 @@ class VariableDefsExportFilter(object):
                 manager (i.e. the value attached to the 'coordinators' key)
 
         :returns: the definitions of variables produced by the configured sensors,
-          formatted as a JSON list of dictionaries, as described in the specs.
+          formatted as a list of dictionaries, as described in the specs.
         """
         # build the merged device list by concatenating the list of devices
         # attached to each coordinator. Thanks to itertools, we don't create
@@ -267,7 +267,7 @@ class VariableDefsExportFilter(object):
         )]
 
         vardefs = self._make_variable_definitions(all_devices)
-        return json.dumps([vdef.__dict__ for vdef in vardefs])
+        return [vdef.as_dict() for vdef in vardefs]
 
     def _make_variable_definitions(self, devices):
         """ Returns the definitions of the variables based on the passed devices
