@@ -22,7 +22,7 @@ class TestFilter01(unittest.TestCase):
         devcfg.METADATA_HOME = fixture_path('devcfg.d')
 
     def setUp(self):
-        self.filter = VariableDefsExportFilter("test_site")
+        self.filter = VariableDefsExportFilter("unittest")
 
     def test_01(self):
         """ Checks all is working as expected with an empty configuration
