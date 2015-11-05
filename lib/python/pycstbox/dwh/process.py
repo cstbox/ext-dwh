@@ -71,6 +71,7 @@ class DWHEventsExportJob(pycstbox.export.EventsExportJob):
         super(DWHEventsExportJob, self).__init__(jobname, jobid, parms)
         self._archive = None
         self._config = config
+        self._site_code = config[ProcessConfiguration.Props.SITE_CODE]
 
     def export_events(self):
         """ Creates a ZIP archive containing the time series of the variables to be exported.
@@ -103,7 +104,7 @@ class DWHEventsExportJob(pycstbox.export.EventsExportJob):
         stamp
         """
         archive_name = "/tmp/%s-%s.zip" % (
-            self._config.site_code, time_stamp.strftime(TEMP_FILES_TIMESTAMP_FORMAT)
+            self._site_code, time_stamp.strftime(TEMP_FILES_TIMESTAMP_FORMAT)
         )
         with zipfile.ZipFile(archive_name, 'w', compression=zipfile.ZIP_DEFLATED) as archive:
             for series_file in series_files:
@@ -121,7 +122,12 @@ class DWHEventsExportJob(pycstbox.export.EventsExportJob):
             self.log_warn('No archive previously created. We should not have been called.')
             return
 
-        url = self._config.data_upload_url % self._config.site_code
+        cfg_server = self._config[_CFG_PROPS.SERVER]
+        url = self._config[_CFG_PROPS.API_URLS][_CFG_PROPS.DATA_UPLOAD] % {
+            'host': cfg_server[_CFG_PROPS.HOST],
+            'site': self._site_code
+        }
+        auth = cfg_server[_CFG_PROPS.AUTH]
 
         with file(self._archive, 'rb') as archive:
             self.log_info('uploading file %s using URL %s', self._archive, url)
@@ -130,7 +136,7 @@ class DWHEventsExportJob(pycstbox.export.EventsExportJob):
                 files={
                     'zip': archive
                 },
-                auth=(self._config.login, self._config.password)
+                auth=(auth[_CFG_PROPS.LOGIN], auth[_CFG_PROPS.PASSWORD])
             )
 
         self.log_info('%s - %s', resp, resp.text)
@@ -166,7 +172,7 @@ class DWHEventsExportJob(pycstbox.export.EventsExportJob):
         Removes the generated archive file if any.
         """
         if self._archive:
-            if not self._config.debug:
+            if not self._config[ProcessConfiguration.Props.DEBUG]:
                 os.remove(self._archive)
             else:
                 self.log_warn('running in debug mode : temp file %s not deleted', self._archive)
@@ -318,9 +324,9 @@ class DWHVariableDefinitionsExportProcess(Loggable):
         # export the configuration as DataWareHouse point definitions
         error = self.ERR_EXPORT
         try:
-            site_code = ProcessConfiguration.Props.SITE_CODE
+            site_code = cfg[ProcessConfiguration.Props.SITE_CODE]
             exp_filter = VariableDefsExportFilter(
-                site_code=cfg[site_code],
+                site_code=site_code,
                 contact=cfg[ProcessConfiguration.Props.REPORT_TO],
                 vars_metadata=vars_metadata
             )
@@ -415,6 +421,7 @@ class ProcessConfiguration(Loggable):
         MAX_ATTEMPTS = 'max_attempts'
         DELAY = 'delay'
         STATUS_MONITORING_PERIOD = 'status_monitoring_period'
+        DEBUG = 'debug'
 
     SCHEMA = {
         "$schema": "http://json-schema.org/draft-04/schema#",
@@ -490,6 +497,9 @@ class ProcessConfiguration(Loggable):
             Props.STATUS_MONITORING_PERIOD: {
                 "type": "integer",
                 "minimum": 1
+            },
+            Props.DEBUG: {
+                "type": "boolean"
             }
         },
         "required": [Props.SITE_CODE]
@@ -509,7 +519,8 @@ class ProcessConfiguration(Loggable):
             Props.MAX_ATTEMPTS: 3,
             Props.DELAY: 10
         },
-        Props.STATUS_MONITORING_PERIOD: 60
+        Props.STATUS_MONITORING_PERIOD: 60,
+        Props.DEBUG: False
     }
 
     def __init__(self):
@@ -518,6 +529,9 @@ class ProcessConfiguration(Loggable):
 
     def __getitem__(self, item):
         return self.data[item]
+
+    def __getattr__(self, name):
+        return self.data[name]
 
     def load(self, path):
         with file(path) as fp:
@@ -549,6 +563,8 @@ class ProcessConfiguration(Loggable):
         if hide_pwd:
             res['server']['auth']['password'] = '********'
         return res
+
+_CFG_PROPS = ProcessConfiguration.Props
 
 
 def _deep_update(d, u):
